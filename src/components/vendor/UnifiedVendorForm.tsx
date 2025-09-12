@@ -77,6 +77,10 @@ export function UnifiedVendorForm({ vendorId, onSubmit, editingRequestId, initia
   const [uploadingImages, setUploadingImages] = useState<{ [key: string]: boolean }>({});
   const [shopImagePreview, setShopImagePreview] = useState<string>('');
   const [productImagePreviews, setProductImagePreviews] = useState<{ [key: number]: string }>({});
+  const [selectedShopImage, setSelectedShopImage] = useState<File | null>(null);
+  const [selectedProductImages, setSelectedProductImages] = useState<{ [key: number]: File }>({});
+  const [originalShopImageUrl, setOriginalShopImageUrl] = useState<string>('');
+  const [originalProductImageUrls, setOriginalProductImageUrls] = useState<{ [key: number]: string }>({});
   const { toast } = useToast();
   const fileInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
 
@@ -165,6 +169,7 @@ export function UnifiedVendorForm({ vendorId, onSubmit, editingRequestId, initia
         });
         if (shopData.image_url) {
           setShopImagePreview(shopData.image_url);
+          setOriginalShopImageUrl(shopData.image_url);
         }
       }
 
@@ -179,14 +184,17 @@ export function UnifiedVendorForm({ vendorId, onSubmit, editingRequestId, initia
         setProducts(productsData);
         setProductFormData(productsData);
         setOriginalProducts(productsData);
-        // Set image previews for existing products
+        // Set image previews and original URLs for existing products
         const previews: { [key: number]: string } = {};
+        const originalUrls: { [key: number]: string } = {};
         productsData.forEach((product, index) => {
           if (product.image_url) {
             previews[index] = product.image_url;
+            originalUrls[index] = product.image_url;
           }
         });
         setProductImagePreviews(previews);
+        setOriginalProductImageUrls(originalUrls);
       }
     } catch (error) {
       console.error('Error fetching vendor data:', error);
@@ -208,7 +216,9 @@ export function UnifiedVendorForm({ vendorId, onSubmit, editingRequestId, initia
       is_vegetarian: true,
       _isNew: true
     };
+    const newIndex = productFormData.length;
     setProductFormData([...productFormData, newProduct]);
+    setOriginalProductImageUrls(prev => ({ ...prev, [newIndex]: '' }));
   };
 
   const updateProduct = (index: number, field: keyof Product, value: any) => {
@@ -229,11 +239,19 @@ export function UnifiedVendorForm({ vendorId, onSubmit, editingRequestId, initia
       const newPreviews = { ...productImagePreviews };
       delete newPreviews[index];
       setProductImagePreviews(newPreviews);
+      // Also remove from selected images
+      const newSelected = { ...selectedProductImages };
+      delete newSelected[index];
+      setSelectedProductImages(newSelected);
+      // Also remove from original URLs
+      const newOriginal = { ...originalProductImageUrls };
+      delete newOriginal[index];
+      setOriginalProductImageUrls(newOriginal);
     }
     setProductFormData(updated);
   };
 
-  const uploadImage = async (file: File, type: 'shop' | 'product', productIndex?: number) => {
+  const uploadImage = async (file: File, type: 'shop' | 'product', productIndex?: number, productId?: string) => {
     const uploadKey = type === 'shop' ? 'shop' : `product-${productIndex}`;
     setUploadingImages(prev => ({ ...prev, [uploadKey]: true }));
 
@@ -248,7 +266,14 @@ export function UnifiedVendorForm({ vendorId, onSubmit, editingRequestId, initia
       const compressedFile = await imageCompression(file, options);
 
       const fileExt = compressedFile.name.split('.').pop();
-      const fileName = `${uploadKey}-${Date.now()}.${fileExt}`;
+      let fileName: string;
+      if (type === 'shop') {
+        fileName = `shop-${vendorId}-pending.${fileExt}`;
+      } else if (type === 'product' && productId) {
+        fileName = `${productId}-pending.${fileExt}`;
+      } else {
+        fileName = `${uploadKey}-${Date.now()}.${fileExt}`;
+      }
 
       const { error: uploadError } = await supabase.storage
         .from('marketplace-images')
@@ -284,47 +309,49 @@ export function UnifiedVendorForm({ vendorId, onSubmit, editingRequestId, initia
     }
   };
 
-  const handleShopImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleShopImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    // Store selected file
+    setSelectedShopImage(file);
 
     // Create preview
     const previewUrl = URL.createObjectURL(file);
     setShopImagePreview(previewUrl);
 
-    // Upload image
-    const imageUrl = await uploadImage(file, 'shop');
-    if (imageUrl) {
-      setShopFormData(prev => ({ ...prev, image_url: imageUrl }));
-    }
+    // Clear any existing uploaded URL since we're replacing it
+    setShopFormData(prev => ({ ...prev, image_url: '' }));
   };
 
-  const handleProductImageUpload = async (event: React.ChangeEvent<HTMLInputElement>, index: number) => {
+  const handleProductImageUpload = (event: React.ChangeEvent<HTMLInputElement>, index: number) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    // Store selected file
+    setSelectedProductImages(prev => ({ ...prev, [index]: file }));
 
     // Create preview
     const previewUrl = URL.createObjectURL(file);
     setProductImagePreviews(prev => ({ ...prev, [index]: previewUrl }));
 
-    // Upload image
-    const imageUrl = await uploadImage(file, 'product', index);
-    if (imageUrl) {
-      updateProduct(index, 'image_url', imageUrl);
-    }
+    // Clear any existing uploaded URL since we're replacing it
+    updateProduct(index, 'image_url', '');
   };
 
   const removeShopImage = () => {
-    setShopFormData(prev => ({ ...prev, image_url: '' }));
-    setShopImagePreview('');
+    setShopFormData(prev => ({ ...prev, image_url: originalShopImageUrl }));
+    setShopImagePreview(originalShopImageUrl);
+    setSelectedShopImage(null);
   };
 
   const removeProductImage = (index: number) => {
-    updateProduct(index, 'image_url', '');
-    setProductImagePreviews(prev => {
-      const newPreviews = { ...prev };
-      delete newPreviews[index];
-      return newPreviews;
+    updateProduct(index, 'image_url', originalProductImageUrls[index] || '');
+    setProductImagePreviews(prev => ({ ...prev, [index]: originalProductImageUrls[index] || '' }));
+    setSelectedProductImages(prev => {
+      const newSelected = { ...prev };
+      delete newSelected[index];
+      return newSelected;
     });
   };
 
@@ -346,6 +373,34 @@ export function UnifiedVendorForm({ vendorId, onSubmit, editingRequestId, initia
 
   const submitUnifiedRequest = async () => {
     try {
+      setUploadingImages({ shop: !!selectedShopImage, ...Object.keys(selectedProductImages).reduce((acc, key) => ({ ...acc, [`product-${key}`]: true }), {}) });
+
+      // Upload shop image if selected
+      if (selectedShopImage) {
+        const shopImageUrl = await uploadImage(selectedShopImage, 'shop');
+        if (shopImageUrl) {
+          setShopFormData(prev => ({ ...prev, image_url: shopImageUrl }));
+        } else {
+          throw new Error('Failed to upload shop image');
+        }
+      }
+
+      // Upload product images if selected
+      for (const [indexStr, file] of Object.entries(selectedProductImages)) {
+        const index = parseInt(indexStr);
+        const productId = productFormData[index]?.id;
+        const productImageUrl = await uploadImage(file, 'product', index, productId);
+        if (productImageUrl) {
+          updateProduct(index, 'image_url', productImageUrl);
+        } else {
+          throw new Error(`Failed to upload image for product ${index + 1}`);
+        }
+      }
+
+      // Clear selected files after successful upload
+      setSelectedShopImage(null);
+      setSelectedProductImages({});
+
       // Filter products that actually changed
       const changedProducts = productFormData.filter(p => {
         if (p._isNew || p._isDeleted) return true;
@@ -399,11 +454,14 @@ export function UnifiedVendorForm({ vendorId, onSubmit, editingRequestId, initia
 
       onSubmit();
     } catch (error) {
+      console.error('Error submitting request:', error);
       toast({
         title: "Error",
-        description: "Failed to submit request.",
+        description: error instanceof Error ? error.message : "Failed to submit request.",
         variant: "destructive"
       });
+    } finally {
+      setUploadingImages({});
     }
   };
 
@@ -426,7 +484,7 @@ export function UnifiedVendorForm({ vendorId, onSubmit, editingRequestId, initia
       >
         {/* Form Panel */}
         <ResizablePanel defaultSize={60} minSize={40}>
-          <div className="p-4 lg:p-6 h-full overflow-auto">
+          <div className="p-4 lg:p-6 overflow-auto" style={{ height: 'calc(100% - 50px)' }}>
             <div className="mb-6">
               <h2 className="text-2xl font-bold mb-2 text-gray-800">
                 {editingRequestId ? 'Edit Change Request' : 'Update Shop & Products'}
@@ -906,7 +964,7 @@ export function UnifiedVendorForm({ vendorId, onSubmit, editingRequestId, initia
 
         {/* Live Preview Panel */}
         <ResizablePanel defaultSize={40} minSize={30}>
-          <div className="p-4 lg:p-6 h-full overflow-auto bg-muted/30">
+          <div className="p-4 lg:p-6 overflow-auto bg-muted/30" style={{ height: 'calc(100% - 50px)' }}>
             <div className="mb-4">
               <h3 className="text-lg font-semibold flex items-center text-gray-800">
                 <Eye className="h-4 w-4 mr-2" />

@@ -226,6 +226,41 @@ export default function AdminPanel() {
     }
   };
 
+  // Helper function to rename image from pending to approved
+  const renameImageToApproved = async (imageUrl: string, newFileName: string) => {
+    if (!imageUrl) return imageUrl;
+
+    try {
+      // Extract file path from public URL
+      const urlParts = imageUrl.split('/storage/v1/object/public/marketplace-images/');
+      if (urlParts.length === 2) {
+        const oldFilePath = urlParts[1];
+
+        // Copy to new location
+        const { error: copyError } = await supabase.storage
+          .from('marketplace-images')
+          .copy(oldFilePath, newFileName);
+
+        if (copyError) throw copyError;
+
+        // Delete old file
+        await supabase.storage
+          .from('marketplace-images')
+          .remove([oldFilePath]);
+
+        // Return new public URL
+        const { data: { publicUrl } } = supabase.storage
+          .from('marketplace-images')
+          .getPublicUrl(newFileName);
+
+        return publicUrl;
+      }
+    } catch (error) {
+      console.error('Error renaming image:', error);
+    }
+    return imageUrl; // Return original if rename fails
+  };
+
   const handleChangeRequest = async (requestId: string, action: 'approve' | 'reject', notes?: string) => {
     try {
       const request = changeRequests.find(r => r.id === requestId);
@@ -240,9 +275,17 @@ export default function AdminPanel() {
             .eq('id', request.vendor_id)
             .single();
 
+          let shopUpdateData = { ...request.request_data };
+
+          // Handle image renaming if it's a pending image
+          if (shopUpdateData.image_url && shopUpdateData.image_url.includes('-pending.')) {
+            const newFileName = `shop-${request.vendor_id}-approved.${shopUpdateData.image_url.split('.').pop()}`;
+            shopUpdateData.image_url = await renameImageToApproved(shopUpdateData.image_url, newFileName);
+          }
+
           await supabase
             .from('shops')
-            .update(request.request_data)
+            .update(shopUpdateData)
             .eq('id', vendor.data?.shop_id);
         } else if (request.request_type === 'product_add') {
           const vendor = await supabase
@@ -251,17 +294,40 @@ export default function AdminPanel() {
             .eq('id', request.vendor_id)
             .single();
 
-          await supabase
+          const { data: insertedProduct, error: insertError } = await supabase
             .from('products')
             .insert({
               ...request.request_data,
               shop_id: vendor.data?.shop_id
-            });
+            })
+            .select('id, image_url')
+            .single();
+
+          if (insertError) throw insertError;
+
+          // Rename image if pending
+          if (insertedProduct?.image_url && insertedProduct.image_url.includes('-pending.')) {
+            const newFileName = `${insertedProduct.id}-approved.${insertedProduct.image_url.split('.').pop()}`;
+            const newImageUrl = await renameImageToApproved(insertedProduct.image_url, newFileName);
+
+            await supabase
+              .from('products')
+              .update({ image_url: newImageUrl })
+              .eq('id', insertedProduct.id);
+          }
         } else if (request.request_type === 'product_update') {
           const { product_id, ...updateData } = request.request_data;
+
+          // Handle image renaming if it's a pending image
+          let finalUpdateData = { ...updateData };
+          if (finalUpdateData.image_url && finalUpdateData.image_url.includes('-pending.')) {
+            const newFileName = `${product_id}-approved.${finalUpdateData.image_url.split('.').pop()}`;
+            finalUpdateData.image_url = await renameImageToApproved(finalUpdateData.image_url, newFileName);
+          }
+
           await supabase
             .from('products')
-            .update(updateData)
+            .update(finalUpdateData)
             .eq('id', product_id);
         } else if (request.request_type === 'unified_update') {
           const vendor = await supabase
@@ -281,14 +347,22 @@ export default function AdminPanel() {
               .eq('id', shopId)
               .single();
 
-            if (currentShop?.image_url && request.request_data.shop_update.image_url &&
-                currentShop.image_url !== request.request_data.shop_update.image_url) {
+            let shopUpdateData = { ...request.request_data.shop_update };
+
+            // Handle image renaming if it's a pending image
+            if (shopUpdateData.image_url && shopUpdateData.image_url.includes('-pending.')) {
+              const newFileName = `shop-${request.vendor_id}-approved.${shopUpdateData.image_url.split('.').pop()}`;
+              shopUpdateData.image_url = await renameImageToApproved(shopUpdateData.image_url, newFileName);
+            }
+
+            if (currentShop?.image_url && shopUpdateData.image_url &&
+                currentShop.image_url !== shopUpdateData.image_url) {
               await deleteImageFromStorage(currentShop.image_url);
             }
 
             await supabase
               .from('shops')
-              .update(request.request_data.shop_update)
+              .update(shopUpdateData)
               .eq('id', shopId);
           }
 
@@ -297,18 +371,44 @@ export default function AdminPanel() {
 
           // Add new products
           if (products.add && products.add.length > 0) {
-            await supabase
+            const { data: insertedProducts, error: insertError } = await supabase
               .from('products')
               .insert(products.add.map((product: any) => ({
                 ...product,
                 shop_id: shopId
-              })));
+              })))
+              .select('id, image_url');
+
+            if (insertError) throw insertError;
+
+            // Rename images for new products
+            if (insertedProducts) {
+              for (const product of insertedProducts) {
+                if (product.image_url && product.image_url.includes('-pending.')) {
+                  const newFileName = `${product.id}-approved.${product.image_url.split('.').pop()}`;
+                  const newImageUrl = await renameImageToApproved(product.image_url, newFileName);
+
+                  // Update the product with the new image URL
+                  await supabase
+                    .from('products')
+                    .update({ image_url: newImageUrl })
+                    .eq('id', product.id);
+                }
+              }
+            }
           }
 
           // Update existing products - delete old images if changed
           if (products.update && products.update.length > 0) {
             for (const product of products.update) {
               const { id, ...updateData } = product;
+
+              // Handle image renaming if it's a pending image
+              let finalUpdateData = { ...updateData };
+              if (finalUpdateData.image_url && finalUpdateData.image_url.includes('-pending.')) {
+                const newFileName = `${id}-approved.${finalUpdateData.image_url.split('.').pop()}`;
+                finalUpdateData.image_url = await renameImageToApproved(finalUpdateData.image_url, newFileName);
+              }
 
               // Fetch current product to check if image changed
               const { data: currentProduct } = await supabase
@@ -317,14 +417,14 @@ export default function AdminPanel() {
                 .eq('id', id)
                 .single();
 
-              if (currentProduct?.image_url && updateData.image_url &&
-                  currentProduct.image_url !== updateData.image_url) {
+              if (currentProduct?.image_url && finalUpdateData.image_url &&
+                  currentProduct.image_url !== finalUpdateData.image_url) {
                 await deleteImageFromStorage(currentProduct.image_url);
               }
 
               await supabase
                 .from('products')
-                .update(updateData)
+                .update(finalUpdateData)
                 .eq('id', id);
             }
           }
