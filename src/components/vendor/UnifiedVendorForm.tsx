@@ -348,7 +348,18 @@ export function UnifiedVendorForm({ vendorId, onSubmit, editingRequestId, initia
           try {
             const compressedFile = await compressImageFile(file);
             const fileExt = compressedFile.name.split('.').pop();
-            const fileName = `product-${index}-${Date.now()}.${fileExt}`;
+            const product = updatedProductFormData[index];
+
+            // Use proper naming convention: {product_id}-pending for existing products, temp-{index}-pending for new products
+            let fileName: string;
+            if (product.id) {
+              // Existing product
+              fileName = `product-${product.id}-pending.${fileExt}`;
+            } else {
+              // New product - use temporary naming
+              fileName = `temp-product-${product.id}-pending.${fileExt}`;
+            }
+
             const publicUrl = await uploadImageToStorage(compressedFile, fileName);
             // Update product image_url in form data
             updatedProductFormData[index] = {
@@ -446,7 +457,7 @@ export function UnifiedVendorForm({ vendorId, onSubmit, editingRequestId, initia
       >
         {/* Form Panel */}
         <ResizablePanel defaultSize={60} minSize={40}>
-          <div className="p-4 lg:p-6 h-full overflow-auto">
+          <div className="p-4 lg:p-6 overflow-auto" style={{ height: `calc(100% - 50px)`}}>
             <div className="mb-6">
               <h2 className="text-2xl font-bold mb-2 text-gray-800">
                 {editingRequestId ? 'Edit Change Request' : 'Update Shop & Products'}
@@ -926,7 +937,7 @@ export function UnifiedVendorForm({ vendorId, onSubmit, editingRequestId, initia
 
         {/* Live Preview Panel */}
         <ResizablePanel defaultSize={40} minSize={30}>
-          <div className="p-4 lg:p-6 h-full overflow-auto bg-muted/30">
+          <div className="p-4 lg:p-6 overflow-auto bg-muted/30" style={{ height: `calc(100% - 50px)`}}>
             <div className="mb-4">
               <h3 className="text-lg font-semibold flex items-center text-gray-800">
                 <Eye className="h-4 w-4 mr-2" />

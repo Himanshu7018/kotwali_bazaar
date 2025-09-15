@@ -7,7 +7,7 @@
 - [x] Update AdminPanel.tsx to rename images from -pending to -approved on approval
 - [x] Ensure shop image upload works with camera and gallery
 - [x] Test that DB queries happen on form submit
-- [ ] Verify no other functionality is broken
+- [x] Verify no other functionality is broken
 
 ## Dependent Files
 - src/components/vendor/UnifiedVendorForm.tsx
